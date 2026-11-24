@@ -122,6 +122,12 @@ class _AppRootState extends State<AppRoot> {
     await OverlayService.instance.setAlwaysOnTop(true);
   }
 
+  /// 设置界面点“退出”：先保存当前输入的词汇卡，再退出应用。
+  Future<void> _exitApp(List<VocabCard> cards) async {
+    await _saveCards(cards);
+    await OverlayService.instance.closeApp();
+  }
+
   Future<void> _applyFromSettings(List<VocabCard> cards) async {
     // 应用：更新主界面卡片、保存，返回主界面。
     setState(() {
@@ -144,6 +150,7 @@ class _AppRootState extends State<AppRoot> {
         initialCards: _cards,
         onApply: _applyFromSettings,
         onBack: _backToMain,
+        onExit: _exitApp,
       );
     }
 

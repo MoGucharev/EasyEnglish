@@ -66,11 +66,19 @@ class OverlayService {
   }
 
   /// 关闭应用（桌面端用 WindowManager，保证资源释放）。
+  ///
+  /// 移动端 / 其他平台回退为退出进程。
   Future<void> closeApp() async {
     if (_isDesktop) {
-      await _wm.destroy();
+      try {
+        await _wm.destroy();
+        return;
+    } catch (_) {
+        // 某些环境 destroy 可能失败，回退到进程退出。
     }
   }
+    exit(0);
+}
 
   /// 查询全局鼠标光标位置（物理像素，屏幕坐标）。
   ///

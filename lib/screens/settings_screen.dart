@@ -18,11 +18,15 @@ class SettingsScreen extends StatefulWidget {
   final void Function(List<VocabCard> cards) onApply;
   final VoidCallback onBack;
 
+  /// 点击右下角“退出”按钮时调用（保存后退出应用），参数为当前输入内容。
+  final void Function(List<VocabCard> cards)? onExit;
+
   const SettingsScreen({
     super.key,
     required this.initialCards,
     required this.onApply,
     required this.onBack,
+    this.onExit,
   });
 
   @override
@@ -133,6 +137,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.onApply(cards);
   }
 
+  void _exit() {
+    // 退出前先收集当前输入内容，交给外部先保存再退出。
+    final cards = _collectCards();
+    final onExit = widget.onExit;
+    if (onExit != null) {
+      onExit(cards);
+      return;
+    }
+    // 未提供退出回调时，直接关闭应用。
+    OverlayService.instance.closeApp();
+  }
+
   @override
   void dispose() {
     for (final e in _entries) {
@@ -179,7 +195,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
@@ -188,6 +204,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   label: const Text('应用'),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ),
+            // “退出”按钮位于“应用”下方：保存后退出应用。
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _exit,
+                  icon: const Icon(Icons.exit_to_app, color: Colors.red),
+                  label: const Text('退出', style: TextStyle(color: Colors.red)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    side: const BorderSide(color: Colors.red),
                   ),
                 ),
               ),
