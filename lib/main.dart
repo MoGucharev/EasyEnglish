@@ -7,6 +7,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+import 'models/card_style.dart';
 import 'models/vocab_card.dart';
 import 'screens/main_screen.dart';
 import 'screens/settings_screen.dart';
@@ -123,6 +124,10 @@ class _AppRootState extends State<AppRoot> {
   final StorageService _storage = StorageService();
 
   List<VocabCard> _cards = <VocabCard>[];
+
+  /// 当前词汇卡整体样式（有边框 / 无边框仅字体）。
+  CardStyle _cardStyle = CardStyle.bordered;
+
   bool _showSettings = false;
   bool _loaded = false;
 
@@ -163,14 +168,16 @@ class _AppRootState extends State<AppRoot> {
     final showing = await MobileController.instance.isShowing();
     if (!showing) return;
     await MobileController.instance.setCardsVisible(true);
-    await MobileController.instance.showCards(_cards);
+    await MobileController.instance.showCards(_cards, style: _cardStyle);
   }
 
   Future<void> _loadCards() async {
     // 进入应用：根据存储内容将词汇卡生成在主界面上。
     final cards = await _storage.loadCards();
+    final settings = await _storage.loadSettings();
     setState(() {
       _cards = _migrateToLogicalCoords(cards);
+      _cardStyle = settings.cardStyle;
       _loaded = true;
     });
   }
@@ -201,14 +208,18 @@ class _AppRootState extends State<AppRoot> {
     );
     if (!anyOutOfBounds) return cards;
 
-    return cards
-        .map((c) => c.copyWith(x: c.x / dpr, y: c.y / dpr))
-        .toList();
+    return cards.map((c) => c.copyWith(x: c.x / dpr, y: c.y / dpr)).toList();
   }
 
   Future<void> _saveCards(List<VocabCard> cards) async {
-    // 退出应用 / 应用时：记录词汇卡数量、位置、英文、中文。
+    // 退出应用 / 应用时：记录词汇卡数量、位置、英文、中文、字体颜色与字号。
     await _storage.saveCards(cards);
+  }
+
+  /// 保存卡片内容与整体样式。
+  Future<void> _saveAll(List<VocabCard> cards, CardStyle style) async {
+    await _storage.saveCards(cards);
+    await _storage.saveSettings(AppSettings(cardStyle: style));
   }
 
   void _openSettings() {
@@ -229,13 +240,16 @@ class _AppRootState extends State<AppRoot> {
     await _syncMobileOverlay();
   }
 
-  /// 设置界面点“退出”：先保存当前输入的词汇卡，再退出应用。
-  Future<void> _exitApp(List<VocabCard> cards) async {
-    await _saveCards(cards);
+  /// 设置界面点“退出”：先保存当前输入的词汇卡与样式，再退出应用。
+  Future<void> _exitApp(List<VocabCard> cards, CardStyle style) async {
+    await _saveAll(cards, style);
     await OverlayService.instance.closeApp();
   }
 
-  Future<void> _applyFromSettings(List<VocabCard> cards) async {
+  Future<void> _applyFromSettings(
+    List<VocabCard> cards,
+    CardStyle style,
+  ) async {
     // 应用：更新主界面卡片、保存，**立即**返回主界面。
     //
     // 注意：必须先把 _showSettings 置回 false，主界面才可能出现；
@@ -243,9 +257,10 @@ class _AppRootState extends State<AppRoot> {
     // 否则点击“应用”后界面会停在设置页（旧版本就是这样）。
     setState(() {
       _cards = cards;
+      _cardStyle = style;
       _showSettings = false;
     });
-    await _saveCards(cards);
+    await _saveAll(cards, style);
 
     // 让主界面先完成一帧渲染，再处理窗口 / 悬浮窗相关的异步操作。
     await WidgetsBinding.instance.endOfFrame;
@@ -274,7 +289,7 @@ class _AppRootState extends State<AppRoot> {
     // 先让悬浮窗可见，再推送最新卡片（推送失败也会在下次同步时补上）。
     try {
       await MobileController.instance.setCardsVisible(true);
-      await MobileController.instance.showCards(cards);
+      await MobileController.instance.showCards(cards, style: _cardStyle);
       debugPrint('[apply] showCards done');
     } catch (e) {
       debugPrint('[apply] showCards error: $e');
@@ -299,10 +314,14 @@ class _AppRootState extends State<AppRoot> {
     if (!_isAndroid) return;
     if (_showSettings) {
       // 设置界面打开中：只把数据送进去、保持隐藏。
-      await MobileController.instance.updateCards(_cards, visible: false);
+      await MobileController.instance.updateCards(
+        _cards,
+        visible: false,
+        style: _cardStyle,
+      );
       return;
     }
-    await MobileController.instance.showCards(_cards);
+    await MobileController.instance.showCards(_cards, style: _cardStyle);
   }
 
   /// 浮动提示（主界面没有 Scaffold，这里自带 Overlay 以适配任意界面）。
@@ -344,6 +363,7 @@ class _AppRootState extends State<AppRoot> {
     if (_showSettings) {
       return SettingsScreen(
         initialCards: _cards,
+        initialStyle: _cardStyle,
         onApply: _applyFromSettings,
         onBack: _backToMain,
         onExit: _exitApp,
@@ -352,9 +372,8 @@ class _AppRootState extends State<AppRoot> {
 
     return MainScreen(
       cards: _cards,
+      cardStyle: _cardStyle,
       onOpenSettings: _openSettings,
     );
   }
 }
-
-

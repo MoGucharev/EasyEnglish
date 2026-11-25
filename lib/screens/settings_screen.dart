@@ -1,14 +1,18 @@
 import 'package:material_ui/material_ui.dart';
 
+import '../models/card_style.dart';
 import '../models/vocab_card.dart';
 import '../services/overlay_service.dart';
+import '../widgets/color_wheel_picker.dart';
 import '../widgets/vocab_card_view.dart';
 import 'adjust_screen.dart';
 
 /// 设置界面：
 ///  * 进入时先清空所有输入卡片；
 ///  * 根据已有词汇卡数量与内容，重建对应数量的输入卡片并填入内容；
+///  * “样式”：切换词汇卡整体外观（有边框 / 无边框仅字体）；
 ///  * “创建词汇”：新增一张空的输入卡片；
+///  * 每张输入卡片可单独设置“字体颜色”（RGB + 透明度圆盘）与“字体大小”；
 ///  * “调整词汇位置”（位于“应用”之上）：进入调整界面；
 ///  * “应用”：把输入卡片内容提交为新词汇卡列表，返回主界面。
 class SettingsScreen extends StatefulWidget {
@@ -18,17 +22,23 @@ class SettingsScreen extends StatefulWidget {
   /// 进入设置时的初始词汇卡（主界面当前显示的内容）。
   final List<VocabCard> initialCards;
 
-  final void Function(List<VocabCard> cards) onApply;
+  /// 进入设置时当前的词汇卡整体样式。
+  final CardStyle initialStyle;
+
+  /// 点击“应用”：提交卡片与当前样式。
+  final void Function(List<VocabCard> cards, CardStyle style) onApply;
+
   final VoidCallback onBack;
 
-  /// 点击右下角“退出”按钮时调用（保存后退出应用），参数为当前输入内容。
-  final void Function(List<VocabCard> cards)? onExit;
+  /// 点击右下角“退出”按钮时调用（保存后退出应用），参数为当前输入内容与样式。
+  final void Function(List<VocabCard> cards, CardStyle style)? onExit;
 
   const SettingsScreen({
     super.key,
     required this.initialCards,
     required this.onApply,
     required this.onBack,
+    this.initialStyle = CardStyle.bordered,
     this.onExit,
   });
 
@@ -42,9 +52,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   final ScrollController _scrollController = ScrollController();
 
+  /// 当前词汇卡整体样式。
+  late CardStyle _style;
+
   @override
   void initState() {
     super.initState();
+    _style = widget.initialStyle;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // 设置界面需要正常交互：关闭穿透、取消置顶。
       OverlayService.instance.setClickThrough(false);
@@ -60,7 +74,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     _entries.clear();
 
-    // 根据词汇卡数量、英文、中文重建输入卡片并填入。
+    // 根据词汇卡数量、英文、中文，重建输入卡片并填入。
     for (final c in cards) {
       _entries.add(_CardEntry.fromCard(c));
     }
@@ -96,6 +110,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return e.base.copyWith(
         english: e.englishController.text.trim(),
         chinese: e.chineseController.text.trim(),
+        fontColor: e.fontColor,
+        fontSize: e.fontSize,
       );
     }).toList();
   }
@@ -106,7 +122,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final result = await Navigator.of(context).push<List<VocabCard>>(
       MaterialPageRoute(
-        builder: (_) => AdjustScreen(initialCards: cards),
+        builder: (_) => AdjustScreen(initialCards: cards, style: _style),
         fullscreenDialog: true,
       ),
     );
@@ -116,7 +132,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await OverlayService.instance.setAlwaysOnTop(false);
 
     if (result != null) {
-      // “完成”：用调整后的位置更新输入卡片（保留输入框文字）。
+      // “完成”：用调整后的位置更新输入卡片（保留输入框文字与样式）。
       _applyAdjustedPositions(result);
     }
     // result 为 null 表示“上一步”（取消调整），无需改动。
@@ -126,11 +142,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // 调整界面里的卡片顺序与 _entries 一致（由 _collectCards 生成）。
     for (var i = 0; i < _entries.length && i < adjusted.length; i++) {
       _entries[i].base = _entries[i].base.copyWith(
-            x: adjusted[i].x,
-            y: adjusted[i].y,
-            width: adjusted[i].width,
-            height: adjusted[i].height,
-          );
+        x: adjusted[i].x,
+        y: adjusted[i].y,
+        width: adjusted[i].width,
+        height: adjusted[i].height,
+      );
     }
     setState(() {});
   }
@@ -139,7 +155,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // 立即收起键盘：避免输入法窗口在“返回主界面”时干扰界面切换。
     FocusManager.instance.primaryFocus?.unfocus();
     final cards = _collectCards();
-    widget.onApply(cards);
+    widget.onApply(cards, _style);
   }
 
   void _exit() {
@@ -147,7 +163,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final cards = _collectCards();
     final onExit = widget.onExit;
     if (onExit != null) {
-      onExit(cards);
+      onExit(cards, _style);
       return;
     }
     // 未提供退出回调时，直接关闭应用。
@@ -174,6 +190,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             _buildHeader(),
             _buildToolbar(),
+            _buildStyleSelector(),
             const Divider(height: 1),
             Expanded(
               child: _entries.isEmpty
@@ -277,6 +294,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  /// “样式”选项：切换全部词汇卡的外观（有边框 / 无边框仅字体）。
+  Widget _buildStyleSelector() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Row(
+        children: [
+          const Icon(Icons.palette_outlined, size: 18, color: Colors.black54),
+          const SizedBox(width: 6),
+          const Text(
+            '样式',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: SegmentedButton<CardStyle>(
+              segments: const [
+                ButtonSegment<CardStyle>(
+                  value: CardStyle.borderless,
+                  label: Text('无边框'),
+                  icon: Icon(Icons.text_fields, size: 16),
+                ),
+                ButtonSegment<CardStyle>(
+                  value: CardStyle.bordered,
+                  label: Text('有边框'),
+                  icon: Icon(Icons.crop_square, size: 16),
+                ),
+              ],
+              selected: {_style},
+              showSelectedIcon: false,
+              onSelectionChanged: (sel) {
+                if (sel.isEmpty) return;
+                setState(() => _style = sel.first);
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildEmpty() {
     return Center(
       child: Column(
@@ -365,12 +422,144 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
             const SizedBox(height: 10),
+            // 字体颜色 + 字体大小。
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(
+                      width: 84,
+                      child: Text('字体颜色', style: TextStyle(fontSize: 14)),
+                    ),
+                    _ColorSwatchButton(
+                      color: entry.fontColor,
+                      onPressed: () => _openColorPicker(index),
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('字体大小', style: TextStyle(fontSize: 14)),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 76,
+                      child: TextField(
+                        controller: entry.fontSizeController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          border: const OutlineInputBorder(),
+                          hintText: '${VocabCard.defaultFontSize.round()}',
+                        ),
+                        onChanged: (value) {
+                          final parsed = double.tryParse(value.trim());
+                          if (parsed == null) return;
+                          entry.fontSize = parsed
+                              .clamp(
+                                VocabCard.minFontSize,
+                                VocabCard.maxFontSize,
+                              )
+                              .toDouble();
+                          setState(() {});
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
             // 预览当前卡片效果。
             Align(
               alignment: Alignment.centerLeft,
-              child: _PreviewChip(entry: entry),
+              child: _PreviewChip(entry: entry, style: _style),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 打开色盘对话框，调整此卡片对应词汇卡的字体颜色。
+  Future<void> _openColorPicker(int index) async {
+    final entry = _entries[index];
+    // 打开前记录原颜色，取消时回滚。
+    final original = entry.fontColor;
+    var picked = original;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('字体颜色'),
+          content: SingleChildScrollView(
+            child: ColorWheelPicker(
+              initialColor: original,
+              size: 220,
+              onChanged: (color) {
+                picked = color;
+                setState(() => entry.fontColor = color);
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('确定'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      // 取消：恢复到打开色盘前的颜色。
+      setState(() => entry.fontColor = original);
+    } else {
+      setState(() => entry.fontColor = picked);
+    }
+  }
+}
+
+/// 显示当前颜色的方形色块按钮（点开色盘）。
+class _ColorSwatchButton extends StatelessWidget {
+  final Color color;
+  final VoidCallback onPressed;
+
+  const _ColorSwatchButton({required this.color, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onPressed,
+      child: Container(
+        width: 44,
+        height: 34,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.black26),
+          // 棋盘格底，便于观察透明度。
+          color: Colors.white,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            color: color,
+            alignment: Alignment.center,
+            child: const Icon(Icons.colorize, size: 16, color: Colors.white70),
+          ),
         ),
       ),
     );
@@ -379,8 +568,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
 class _PreviewChip extends StatelessWidget {
   final _CardEntry entry;
+  final CardStyle style;
 
-  const _PreviewChip({required this.entry});
+  const _PreviewChip({required this.entry, required this.style});
 
   @override
   Widget build(BuildContext context) {
@@ -393,10 +583,16 @@ class _PreviewChip extends StatelessWidget {
             final preview = entry.base.copyWith(
               english: enVal.text.trim(),
               chinese: zhVal.text.trim(),
+              fontColor: entry.fontColor,
+              fontSize: entry.fontSize,
             );
-            return Opacity(
-              opacity: 0.9,
-              child: VocabCardView(card: preview),
+            return Container(
+              decoration: BoxDecoration(
+                // 预览时铺一层深色底，保证浅色 / 半透明字体也看得清。
+                color: const Color(0xFF2B2B2B),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: VocabCardView(card: preview, style: style),
             );
           },
         );
@@ -411,10 +607,22 @@ class _CardEntry {
   final TextEditingController englishController;
   final TextEditingController chineseController;
 
+  /// “字体大小”输入框的控制器。
+  final TextEditingController fontSizeController;
+
+  /// 字体颜色（含透明度）。
+  Color fontColor;
+
+  /// 字体大小（英文基础字号）。
+  double fontSize;
+
   _CardEntry({
     required this.base,
     required this.englishController,
     required this.chineseController,
+    required this.fontSizeController,
+    required this.fontColor,
+    required this.fontSize,
   });
 
   factory _CardEntry.fromCard(VocabCard card) {
@@ -422,11 +630,24 @@ class _CardEntry {
       base: card,
       englishController: TextEditingController(text: card.english),
       chineseController: TextEditingController(text: card.chinese),
+      // 输入框里预填当前字号（新卡片为默认值）。
+      fontSizeController: TextEditingController(
+        text: _formatFontSize(card.fontSize),
+      ),
+      fontColor: card.fontColor,
+      fontSize: card.fontSize,
     );
+  }
+
+  static String _formatFontSize(double value) {
+    // 整数不显示小数位，其余保留一位，便于阅读。
+    if (value == value.roundToDouble()) return value.toStringAsFixed(0);
+    return value.toStringAsFixed(1);
   }
 
   void dispose() {
     englishController.dispose();
     chineseController.dispose();
+    fontSizeController.dispose();
   }
 }

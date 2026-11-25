@@ -23,8 +23,9 @@ import 'overlay_platform.dart';
 class DesktopOverlayPlatform implements OverlayPlatform {
   WindowManager get _wm => WindowManager.instance;
 
-  static const MethodChannel _cursorChannel =
-      MethodChannel('vocab_overlay/cursor');
+  static const MethodChannel _cursorChannel = MethodChannel(
+    'vocab_overlay/cursor',
+  );
 
   @override
   Future<void> initWindowForOverlay() async {
@@ -80,8 +81,9 @@ class DesktopOverlayPlatform implements OverlayPlatform {
   Future<Offset?> getGlobalCursorPos() async {
     if (!Platform.isWindows) return null;
     try {
-      final result =
-          await _cursorChannel.invokeMapMethod<String, dynamic>('getCursorPos');
+      final result = await _cursorChannel.invokeMapMethod<String, dynamic>(
+        'getCursorPos',
+      );
       if (result == null) return null;
       final x = (result['x'] as num?)?.toDouble();
       final y = (result['y'] as num?)?.toDouble();

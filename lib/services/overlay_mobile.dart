@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 
+import '../models/card_style.dart';
 import '../models/vocab_card.dart';
 import 'overlay_platform.dart';
 
@@ -83,6 +84,7 @@ class MobileOverlayPlatform implements OverlayPlatform {
   Future<void> showOverlay({
     required List<VocabCard> cards,
     bool adjustMode = false,
+    CardStyle cardStyle = CardStyle.bordered,
   }) async {
     if (!_isAndroid) return;
     if (!await isPermissionGranted()) return;
@@ -115,7 +117,7 @@ class MobileOverlayPlatform implements OverlayPlatform {
     // 刚显示时立刻发送的数据有极小概率丢失。这里连续推送几次，保证卡片一定
     // 到达悬浮窗引擎；同时也覆盖“窗口刚被重建”的情况。
     for (var i = 0; i < 3; i++) {
-      await _pushCards(cards, adjustMode: adjustMode);
+      await _pushCards(cards, adjustMode: adjustMode, cardStyle: cardStyle);
       if (i < 2) {
         await Future<void>.delayed(const Duration(milliseconds: 120));
       }
@@ -125,9 +127,18 @@ class MobileOverlayPlatform implements OverlayPlatform {
   /// 更新悬浮窗内的卡片内容（不改变显示 / 触摸状态）。
   ///
   /// [visible] 为 null 时不改变可见性；否则一并切换。
-  Future<void> updateCards(List<VocabCard> cards, {bool? visible}) async {
+  Future<void> updateCards(
+    List<VocabCard> cards, {
+    bool? visible,
+    CardStyle cardStyle = CardStyle.bordered,
+  }) async {
     if (!_isAndroid || !await isActive()) return;
-    await _pushCards(cards, adjustMode: false, visible: visible);
+    await _pushCards(
+      cards,
+      adjustMode: false,
+      visible: visible,
+      cardStyle: cardStyle,
+    );
   }
 
   /// 切换调整模式（可触摸拖动 vs 穿透）。
@@ -163,10 +174,12 @@ class MobileOverlayPlatform implements OverlayPlatform {
     List<VocabCard> cards, {
     required bool adjustMode,
     bool? visible,
+    CardStyle cardStyle = CardStyle.bordered,
   }) async {
     final map = <String, dynamic>{
       'cards': cards.map((c) => c.toJson()).toList(),
       'adjust': adjustMode,
+      'cardStyle': cardStyle.id,
     };
     if (visible != null) map['visible'] = visible;
     await FlutterOverlayWindow.shareData(jsonEncode(map));

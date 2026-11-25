@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:material_ui/material_ui.dart';
 
+import '../models/card_style.dart';
 import '../models/vocab_card.dart';
 import '../services/overlay_service.dart';
 import '../widgets/vocab_card_view.dart';
@@ -17,7 +18,14 @@ import '../widgets/vocab_card_view.dart';
 class AdjustScreen extends StatefulWidget {
   final List<VocabCard> initialCards;
 
-  const AdjustScreen({super.key, required this.initialCards});
+  /// 当前词汇卡整体样式（仅用于显示，不影响位置）。
+  final CardStyle style;
+
+  const AdjustScreen({
+    super.key,
+    required this.initialCards,
+    this.style = CardStyle.bordered,
+  });
 
   @override
   State<AdjustScreen> createState() => _AdjustScreenState();
@@ -60,10 +68,12 @@ class _AdjustScreenState extends State<AdjustScreen> {
   /// 把卡片位置限制在屏幕范围内（允许贴边，但不允许拖出屏幕）。
   Offset _clampToScreen(Offset pos, VocabCard card) {
     final size = _screenSize;
-    final maxX =
-        (size.width - card.width).clamp(0.0, double.infinity).toDouble();
-    final maxY =
-        (size.height - card.height).clamp(0.0, double.infinity).toDouble();
+    final maxX = (size.width - card.width)
+        .clamp(0.0, double.infinity)
+        .toDouble();
+    final maxY = (size.height - card.height)
+        .clamp(0.0, double.infinity)
+        .toDouble();
     return Offset(
       pos.dx.clamp(0.0, maxX).toDouble(),
       pos.dy.clamp(0.0, maxY).toDouble(),
@@ -106,6 +116,7 @@ class _AdjustScreenState extends State<AdjustScreen> {
             _DraggableCard(
               key: ValueKey('adjust_card_$i'),
               card: _cards[i],
+              style: widget.style,
               onDragStart: (pointer) {
                 _grabOffsets[i] = Offset(_cards[i].x, _cards[i].y) - pointer;
               },
@@ -124,8 +135,9 @@ class _AdjustScreenState extends State<AdjustScreen> {
                   // 防御：拖动开始事件丢失时，退化为按位移移动。
                   setState(() {
                     final target = Offset(_cards[i].x, _cards[i].y) + pointer;
-                    _cards[i] =
-                        _cards[i].movedTo(_clampToScreen(target, _cards[i]));
+                    _cards[i] = _cards[i].movedTo(
+                      _clampToScreen(target, _cards[i]),
+                    );
                   });
                 }
               },
@@ -162,8 +174,10 @@ class _AdjustScreenState extends State<AdjustScreen> {
             child: IgnorePointer(
               child: Center(
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black.withValues(alpha: 0.5),
                     borderRadius: BorderRadius.circular(20),
@@ -188,6 +202,7 @@ class _AdjustScreenState extends State<AdjustScreen> {
 /// 因此卡片可以精确地放到屏幕上的任意位置。
 class _DraggableCard extends StatefulWidget {
   final VocabCard card;
+  final CardStyle style;
   final ValueChanged<Offset> onDragStart;
   final ValueChanged<Offset> onDragUpdate;
   final VoidCallback? onDragEnd;
@@ -195,6 +210,7 @@ class _DraggableCard extends StatefulWidget {
   const _DraggableCard({
     super.key,
     required this.card,
+    this.style = CardStyle.bordered,
     required this.onDragStart,
     required this.onDragUpdate,
     this.onDragEnd,
@@ -226,7 +242,11 @@ class _DraggableCardState extends State<_DraggableCard> {
         onPanCancel: () => widget.onDragEnd?.call(),
         child: MouseRegion(
           cursor: SystemMouseCursors.grab,
-          child: VocabCardView(card: widget.card, highlight: true),
+          child: VocabCardView(
+            card: widget.card,
+            style: widget.style,
+            highlight: true,
+          ),
         ),
       ),
     );

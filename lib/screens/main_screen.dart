@@ -1,7 +1,8 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 
+import '../models/card_style.dart';
 import '../models/vocab_card.dart';
 import '../services/overlay_service.dart';
 import '../widgets/vocab_card_view.dart';
@@ -22,12 +23,17 @@ import '../widgets/vocab_card_view.dart';
 /// 移动端无法做到系统级穿透（见 README），此处仅保持透明并正常显示按钮。
 class MainScreen extends StatefulWidget {
   final List<VocabCard> cards;
+
+  /// 词汇卡整体样式（有边框 / 无边框仅字体）。
+  final CardStyle cardStyle;
+
   final VoidCallback onOpenSettings;
 
   const MainScreen({
     super.key,
     required this.cards,
     required this.onOpenSettings,
+    this.cardStyle = CardStyle.bordered,
   });
 
   @override
@@ -129,7 +135,10 @@ class _MainScreenState extends State<MainScreen> {
                       left: card.x,
                       top: card.y,
                       child: IgnorePointer(
-                        child: VocabCardView(card: card),
+                        child: VocabCardView(
+                          card: card,
+                          style: widget.cardStyle,
+                        ),
                       ),
                     ),
                 ],
@@ -208,10 +217,7 @@ class _SettingsButton extends StatelessWidget {
             children: [
               Icon(Icons.settings, size: 16, color: Colors.white),
               SizedBox(width: 6),
-              Text(
-                '设置',
-                style: TextStyle(color: Colors.white, fontSize: 13),
-              ),
+              Text('设置', style: TextStyle(color: Colors.white, fontSize: 13)),
             ],
           ),
         ),

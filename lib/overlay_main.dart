@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'models/card_style.dart';
 import 'models/vocab_card.dart';
 import 'widgets/vocab_card_view.dart';
 
@@ -45,6 +46,9 @@ class _OverlayApp extends StatefulWidget {
 class _OverlayAppState extends State<_OverlayApp> {
   List<VocabCard> _cards = <VocabCard>[];
   bool _adjustMode = false;
+
+  /// 词汇卡整体样式（由主应用随消息推送）。
+  CardStyle _cardStyle = CardStyle.bordered;
 
   /// 主应用正在显示设置 / 调整界面时为 false：此时由主应用自己显示卡片，
   /// 悬浮窗内容先隐藏，避免重复显示、也避免数据同步间隙里的错位。
@@ -122,6 +126,11 @@ class _OverlayAppState extends State<_OverlayApp> {
           _adjustMode = map['adjust'] == true;
           _grabOffsets.clear();
         }
+        // 样式可随任意消息携带；缺失时保持当前样式。
+        final rawStyle = map['cardStyle'];
+        if (rawStyle != null) {
+          _cardStyle = CardStyle.fromId(rawStyle);
+        }
         final visible = map['visible'];
         if (visible is bool) _visible = visible;
       });
@@ -160,6 +169,7 @@ class _OverlayAppState extends State<_OverlayApp> {
                     ? _DraggableCard(
                         key: ValueKey('overlay_card_$i'),
                         card: _cards[i],
+                        style: _cardStyle,
                         screen: screen,
                         onDragStart: (pointer) {
                           _grabOffsets[i] =
@@ -185,7 +195,10 @@ class _OverlayAppState extends State<_OverlayApp> {
                     : Positioned(
                         left: _cards[i].x,
                         top: _cards[i].y,
-                        child: VocabCardView(card: _cards[i]),
+                        child: VocabCardView(
+                          card: _cards[i],
+                          style: _cardStyle,
+                        ),
                       ),
           ],
         ),
@@ -194,10 +207,12 @@ class _OverlayAppState extends State<_OverlayApp> {
   }
 
   Offset _clamp(Offset pos, VocabCard card, Size screen) {
-    final maxX =
-        (screen.width - card.width).clamp(0.0, double.infinity).toDouble();
-    final maxY =
-        (screen.height - card.height).clamp(0.0, double.infinity).toDouble();
+    final maxX = (screen.width - card.width)
+        .clamp(0.0, double.infinity)
+        .toDouble();
+    final maxY = (screen.height - card.height)
+        .clamp(0.0, double.infinity)
+        .toDouble();
     return Offset(
       pos.dx.clamp(0.0, maxX).toDouble(),
       pos.dy.clamp(0.0, maxY).toDouble(),
@@ -208,6 +223,7 @@ class _OverlayAppState extends State<_OverlayApp> {
 /// 调整模式下可拖动的卡片。
 class _DraggableCard extends StatefulWidget {
   final VocabCard card;
+  final CardStyle style;
   final Size screen;
   final ValueChanged<Offset> onDragStart;
   final ValueChanged<Offset> onDragUpdate;
@@ -216,6 +232,7 @@ class _DraggableCard extends StatefulWidget {
   const _DraggableCard({
     super.key,
     required this.card,
+    this.style = CardStyle.bordered,
     required this.screen,
     required this.onDragStart,
     required this.onDragUpdate,
@@ -239,7 +256,11 @@ class _DraggableCardState extends State<_DraggableCard> {
         onPanUpdate: (d) => widget.onDragUpdate(d.globalPosition),
         onPanEnd: (_) => widget.onDragEnd(),
         onPanCancel: widget.onDragEnd,
-        child: VocabCardView(card: widget.card, highlight: true),
+        child: VocabCardView(
+          card: widget.card,
+          style: widget.style,
+          highlight: true,
+        ),
       ),
     );
   }

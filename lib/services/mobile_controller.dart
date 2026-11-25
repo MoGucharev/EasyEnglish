@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 
+import '../models/card_style.dart';
 import '../models/vocab_card.dart';
 import 'overlay_mobile.dart';
 
@@ -74,8 +75,15 @@ class MobileController {
   Future<bool> ensurePermission() => _platform.requestPermission();
 
   /// 显示悬浮窗并推送卡片（浏览 / 穿透模式）。
-  Future<void> showCards(List<VocabCard> cards) async {
-    await _platform.showOverlay(cards: cards, adjustMode: false);
+  Future<void> showCards(
+    List<VocabCard> cards, {
+    CardStyle style = CardStyle.bordered,
+  }) async {
+    await _platform.showOverlay(
+      cards: cards,
+      adjustMode: false,
+      cardStyle: style,
+    );
   }
 
   /// 悬浮窗是否正在显示。
@@ -97,8 +105,12 @@ class MobileController {
   }
 
   /// 仅更新卡片内容。[visible] 非空时同时切换可见性。
-  Future<void> updateCards(List<VocabCard> cards, {bool? visible}) async {
-    await _platform.updateCards(cards, visible: visible);
+  Future<void> updateCards(
+    List<VocabCard> cards, {
+    bool? visible,
+    CardStyle style = CardStyle.bordered,
+  }) async {
+    await _platform.updateCards(cards, visible: visible, cardStyle: style);
   }
 
   /// 关闭悬浮窗。
@@ -111,5 +123,3 @@ class MobileController {
   /// 主应用移到后台（让悬浮窗显示在其他应用之上）。
   Future<void> moveToBackground() => _platform.moveToBackground();
 }
-
-

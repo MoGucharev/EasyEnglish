@@ -21,8 +21,7 @@ class OverlayService {
       OverlayService._(platform);
 
   /// 全局单例：按运行平台自动选择实现。
-  static final OverlayService instance =
-      OverlayService._(defaultPlatform());
+  static final OverlayService instance = OverlayService._(defaultPlatform());
 
   final OverlayPlatform _platform;
 
