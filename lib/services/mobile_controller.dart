@@ -41,17 +41,21 @@ class MobileController {
   void startListening() {
     if (_listening) return;
     _listening = true;
-    FlutterOverlayWindow.overlayListener.listen((message) {
+    FlutterOverlayWindow.overlayListener.listen((message) async {
       if (message is! String) return;
       try {
         final decoded = jsonDecode(message);
         if (decoded is! Map) return;
         final map = Map<String, dynamic>.from(decoded);
 
-        // 握手：悬浮窗引擎启动后主动上报 ready，主应用据此回推卡片，
-        // 彻底消除“showOverlay 后立刻推送、数据在引擎就绪前丢失”的时序问题。
+        // 握手：悬浮窗引擎启动后主动上报 ready。
+        //
+        // 引擎可能被重建多次（插件在 onStartCommand 里会先 cleanup 再
+        // addView），每次重建后原生窗口的触摸标志与卡片内容都会丢，所以这里
+        // 每次握手都先由平台层**无条件**补齐“期望状态”，再通知上层回推卡片。
         if (map['ready'] == true) {
           debugPrint('[main] overlay ready → re-push cards');
+          await _platform.onEngineReady();
           onOverlayReady?.call();
           return;
         }
@@ -119,6 +123,15 @@ class MobileController {
   /// 只切换悬浮窗内容的可见性（不重建 / 不移动卡片）。
   Future<void> setCardsVisible(bool visible) =>
       _platform.setCardsVisible(visible);
+
+  /// 主应用界面（设置 / 调整）是否正在显示。
+  ///
+  /// 平台层据此决定悬浮窗内容是否隐藏；并且会记住这个意图，等悬浮窗引擎就绪
+  /// 时补发，避免“界面已切走、悬浮窗却仍然隐藏”的时序问题。
+  void setPageVisible(bool visible) {
+    _platform.setPageVisible(visible);
+    onPageStateChanged?.call(visible);
+  }
 
   /// 主应用移到后台（让悬浮窗显示在其他应用之上）。
   Future<void> moveToBackground() => _platform.moveToBackground();

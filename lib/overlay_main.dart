@@ -74,13 +74,22 @@ class _OverlayAppState extends State<_OverlayApp> {
     _announceReady();
   }
 
+  /// 引擎重建计数：用于让主应用区分“首次就绪”与“重建后就绪”。
+  ///
+  /// 悬浮窗引擎可能被重建（插件在 onStartCommand 里会先 cleanup 再 addView），
+  /// 重建后状态全部丢失，主应用必须重新下发触摸标志与卡片。
+  static int _readyCount = 0;
+
   Future<void> _announceReady() async {
     // 稍等一帧，确保监听与首帧渲染就绪后再报告。
     await Future<void>.delayed(const Duration(milliseconds: 80));
     if (!mounted) return;
+    _readyCount++;
     try {
-      await FlutterOverlayWindow.shareData(jsonEncode({'ready': true}));
-      debugPrint('[overlay] ready sent');
+      await FlutterOverlayWindow.shareData(
+        jsonEncode({'ready': true, 'count': _readyCount}),
+      );
+      debugPrint('[overlay] ready sent (#$_readyCount)');
     } catch (e) {
       debugPrint('[overlay] ready failed: $e');
     }

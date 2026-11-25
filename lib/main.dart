@@ -120,7 +120,7 @@ class AppRoot extends StatefulWidget {
   State<AppRoot> createState() => _AppRootState();
 }
 
-class _AppRootState extends State<AppRoot> {
+class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   final StorageService _storage = StorageService();
 
   List<VocabCard> _cards = <VocabCard>[];
@@ -143,6 +143,13 @@ class _AppRootState extends State<AppRoot> {
       MobileController.instance.startListening();
       // 设置界面关闭时让悬浮窗恢复显示（具体状态在 _syncMobileOverlay 里同步）。
       SettingsScreen.onClosed = _syncMobileOverlay;
+      // ★ 切到后台时自动把词汇卡悬浮到其他应用之上。
+      //
+      // 之前只有点了“应用”才会创建悬浮窗（并 moveTaskToBack），所以“打开软件
+      // 后直接切到后台”不会有任何悬浮卡。这里监听生命周期：一旦本应用不再处于
+      // 前台（[didChangeAppLifecycleState] 收到 paused/hidden），就确保悬浮窗
+      // 已创建并显示最新卡片。
+      WidgetsBinding.instance.addObserver(this);
       // 主界面首次显示时，如果悬浮窗已经在显示（例如从后台切回来、
       // 或主界面被系统销毁后重建），让它重新显示卡片内容。
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -167,8 +174,56 @@ class _AppRootState extends State<AppRoot> {
     if (!_isAndroid) return;
     final showing = await MobileController.instance.isShowing();
     if (!showing) return;
-    await MobileController.instance.setCardsVisible(true);
+    // 只有主界面自己也需要显示卡片时才让悬浮窗显示，避免与设置界面重复。
+    MobileController.instance.setPageVisible(_showSettings);
     await MobileController.instance.showCards(_cards, style: _cardStyle);
+  }
+
+  // ---- 生命周期：切到后台 / 回到前台 ----
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (!_isAndroid) return;
+    debugPrint('[lifecycle] $state');
+    switch (state) {
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        // 本应用即将 / 已经不在前台：确保悬浮窗存在并显示最新卡片，
+        // 这样即使用户没有点过“应用”，词汇卡也会自动浮在其他应用之上。
+        _ensureFloatingOnBackground();
+      case AppLifecycleState.resumed:
+        // 回到前台：悬浮窗让位给主界面（若正在设置界面则保持隐藏）。
+        _syncMobileOverlay();
+    }
+  }
+
+  /// 切到后台时调用：权限已授予则直接创建 / 更新悬浮窗并显示卡片。
+  ///
+  /// 未授权时**不**跳转系统设置页（切后台时弹权限页体验很糟），
+  /// 只把“需要显示”这件事记下来（[MobileController.setPageVisible]），
+  /// 用户真正在前台点“应用”时再申请权限。
+  Future<void> _ensureFloatingOnBackground() async {
+    if (!_isAndroid || _loaded == false) return;
+    // 主应用自己的界面正在显示 → 不需要悬浮窗（避免重复显示卡片）。
+    if (_showSettings) return;
+
+    final granted = await MobileController.instance
+        .platform
+        .isPermissionGranted();
+    debugPrint('[lifecycle] background → permission granted=$granted');
+    if (!granted) return;
+
+    // 记录“主应用不在前台”，悬浮窗引擎就绪时也会据此保持卡片可见。
+    MobileController.instance.setPageVisible(false);
+    try {
+      await MobileController.instance.showCards(_cards, style: _cardStyle);
+      debugPrint('[lifecycle] background → overlay shown');
+    } catch (e) {
+      debugPrint('[lifecycle] background showCards error: $e');
+    }
   }
 
   Future<void> _loadCards() async {
@@ -226,8 +281,20 @@ class _AppRootState extends State<AppRoot> {
     setState(() => _showSettings = true);
     // 移动端：隐藏悬浮窗里的卡片，避免与设置界面里的预览重复显示，
     // 也避免在推送数据用尽前出现尺寸 / 位置错位。
+    //
+    // 注意必须走 [MobileController.setPageVisible]：平台层会记住“界面正在
+    // 显示”这个意图，等悬浮窗引擎（重新）就绪时据此保持卡片隐藏，
+    // 否则引擎重建后会把卡片又显示出来。
+    //
+    // 另外同步一次卡片数据（不可见）：悬浮窗里那份可能是旧内容，
+    // 进入设置界面时保持与主界面一致，避免返回后第一帧闪出旧卡片。
     if (_isAndroid) {
-      MobileController.instance.setCardsVisible(false);
+      MobileController.instance.setPageVisible(true);
+      MobileController.instance.updateCards(
+        _cards,
+        visible: false,
+        style: _cardStyle,
+      );
     }
   }
 
@@ -286,9 +353,11 @@ class _AppRootState extends State<AppRoot> {
       _showMessage('需要“显示在其他应用上层”权限才能显示悬浮卡');
       return;
     }
-    // 先让悬浮窗可见，再推送最新卡片（推送失败也会在下次同步时补上）。
+    // 主界面即将重新显示（_showSettings 已在调用前置为 false），
+    // 同步“页面可见性 = 不可见”，让悬浮窗引擎就绪后也能保持卡片可见。
+    MobileController.instance.setPageVisible(false);
+    // 显示悬浮窗 + 推送最新卡片（推送失败也会在引擎握手 / 下次同步时补上）。
     try {
-      await MobileController.instance.setCardsVisible(true);
       await MobileController.instance.showCards(cards, style: _cardStyle);
       debugPrint('[apply] showCards done');
     } catch (e) {
@@ -321,7 +390,18 @@ class _AppRootState extends State<AppRoot> {
       );
       return;
     }
+    // 注意：握手可能发生在“悬浮窗窗口还没有 addView”的时刻，此时
+    // updateFlag 会失败。走 showCards 而不是 updateCards，是因为它会先
+    // 判断窗口是否存在，不存在则重新创建（平台的期望状态机制随后补齐标志）。
     await MobileController.instance.showCards(_cards, style: _cardStyle);
+  }
+
+  @override
+  void dispose() {
+    if (_isAndroid) {
+      WidgetsBinding.instance.removeObserver(this);
+    }
+    super.dispose();
   }
 
   /// 浮动提示（主界面没有 Scaffold，这里自带 Overlay 以适配任意界面）。
