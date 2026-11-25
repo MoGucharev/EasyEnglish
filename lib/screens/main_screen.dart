@@ -50,6 +50,9 @@ class _MainScreenState extends State<MainScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // 默认整体穿透。
       OverlayService.instance.setClickThrough(true);
+      // 桌面端靠全局光标轮询来临时关闭穿透，让“设置”按钮可点；
+      // 移动端没有全局光标（轮询恒为 null），必须关闭穿透才能点到按钮 ——
+      // 否则按钮永远点不动，也就进不了设置界面。
       _startCursorWatch();
     });
   }
@@ -64,11 +67,26 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _pollCursor() async {
     if (_busy) return;
-    final hotZone = _buttonHotZone;
-    if (hotZone == null) return;
 
     final cursor = await OverlayService.instance.getGlobalCursorPos();
-    if (cursor == null || !mounted) return;
+    if (!mounted) return;
+    if (cursor == null) {
+      // 不支持全局光标的平台（Android / iOS / macOS / Linux）：
+      // 无法检测光标是否进入热区，只能让主界面可交互，否则“设置”按钮
+      // 永远收不到点击。卡片区域本身仍是 IgnorePointer，不会拦截事件。
+      if (_inButtonHotZone) return;
+      _busy = true;
+      try {
+        setState(() => _inButtonHotZone = true);
+        await OverlayService.instance.setClickThrough(false);
+      } finally {
+        _busy = false;
+      }
+      return;
+    }
+
+    final hotZone = _buttonHotZone;
+    if (hotZone == null) return;
 
     // 原生返回的是物理像素（屏幕坐标）；而热区 _buttonHotZone 是 Flutter
     // 逻辑坐标。这里用 devicePixelRatio 把光标换算到逻辑坐标再比较，

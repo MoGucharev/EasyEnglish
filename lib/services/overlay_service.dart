@@ -1,106 +1,67 @@
-// ignore_for_file: deprecated_member_use
+import 'dart:ui' show Offset;
 
-import 'dart:io';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
-import 'package:window_manager/legacy.dart';
+import 'overlay_desktop.dart';
+import 'overlay_mobile.dart';
+import 'overlay_platform.dart';
 
-/// 负责主界面“穿透 / 置顶 / 透明 / 铺满屏幕”这些与平台窗口相关的设置。
+/// 负责主界面“穿透 / 置顶 / 透明 / 铺满屏幕 / 全局光标”等与平台窗口相关的
+/// 能力的**统一入口**。
 ///
-/// 关于“铺满屏幕”：
-///   窗口的「无边框 + 置顶 + 铺满整个显示器」由 Windows 原生层
-///   （见 windows/runner/win32_window.cpp 的 `MakeOverlayFullscreen`）在
-///   应用启动时就完成，最可靠。Dart 侧不再用 `setBounds` 去算坐标 / 缩放，
-///   因为 `window_manager` 的 bounds 与显示器物理像素 / DPI 之间的换算在
-///   不同环境下并不一致，反而会把已经铺满的窗口“改小 / 挪偏”。
-///   这里只负责穿透、透明、以及再次确认置顶。
+/// 实现上按平台委派给 [OverlayPlatform]：
+///  * 桌面端 → [DesktopOverlayPlatform]（window_manager + Windows 原生通道）；
+///  * 移动端 → [MobileOverlayPlatform]（当前为 no-op 占位）。
+///
+/// 说明：此类的公开 API（[instance] 及所有方法）与重构前保持一致，
+/// 既有调用点（main / 各界面）无需任何改动，桌面端行为零回归。
 class OverlayService {
-  OverlayService._();
+  OverlayService._(this._platform);
 
-  static final OverlayService instance = OverlayService._();
+  /// 用指定的平台实现构造（便于测试注入）。
+  factory OverlayService.withPlatform(OverlayPlatform platform) =>
+      OverlayService._(platform);
 
-  WindowManager get _wm => WindowManager.instance;
+  /// 全局单例：按运行平台自动选择实现。
+  static final OverlayService instance =
+      OverlayService._(defaultPlatform());
 
-  static bool get _isDesktop =>
-      !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+  final OverlayPlatform _platform;
+
+  /// 根据运行平台选择默认实现。
+  static OverlayPlatform defaultPlatform() {
+    if (isDesktopPlatform()) {
+      return DesktopOverlayPlatform();
+    }
+    return MobileOverlayPlatform();
+  }
+
+  /// 当前使用的平台实现（便于测试注入 / 排查）。
+  OverlayPlatform get platform => _platform;
 
   /// 应用启动时的窗口初始化（仅桌面端有效）。
-  Future<void> initWindowForOverlay() async {
-    if (!_isDesktop) return;
-    // 原生层已经把窗口设为无边框 / 置顶 / 铺满屏幕；这里只处理 Flutter 侧
-    // 需要的透明背景与穿透，并对无边框 / 置顶再做一次“兜底确认”。
-    await _wm.setAsFrameless();
-    await _wm.setAlwaysOnTop(true);
-    await _wm.setBackgroundColor(const Color(0x00000000));
-    await _wm.setHasShadow(false);
-    // 默认让整个窗口穿透。
-    await setClickThrough(true);
-  }
+  Future<void> initWindowForOverlay() => _platform.initWindowForOverlay();
 
-  /// 再次确认窗口“无边框 + 置顶”。
-  ///
-  /// 注意：不做任何 `setBounds` / 缩放换算——铺满屏幕完全交给原生层，
-  /// 避免与原生窗口尺寸互相拉扯。保留此方法是为了兼容既有调用点。
-  Future<void> ensureCoverScreen() async {
-    if (!_isDesktop) return;
-    await _wm.setAsFrameless();
-    await _wm.setAlwaysOnTop(true);
-  }
+  /// 再次确认窗口“无边框 + 置顶”（桌面端；铺满屏幕交给原生层）。
+  Future<void> ensureCoverScreen() => _platform.ensureCoverScreen();
 
   /// 让整个窗口是否“穿透”鼠标事件。
   ///
   /// [clickThrough] 为 true 时，鼠标/触摸事件会传递给下面的其他应用。
-  Future<void> setClickThrough(bool clickThrough) async {
-    if (!_isDesktop) return;
-    await _wm.setIgnoreMouseEvents(clickThrough, forward: true);
-  }
+  Future<void> setClickThrough(bool clickThrough) =>
+      _platform.setClickThrough(clickThrough);
 
   /// 兼容命名：设置窗口是否拦截交互（与 [setClickThrough] 相反）。
   Future<void> setInteractive(bool interactive) =>
-      setClickThrough(!interactive);
+      _platform.setInteractive(interactive);
 
   /// 切换主界面 / 设置界面的置顶状态。
-  Future<void> setAlwaysOnTop(bool value) async {
-    if (!_isDesktop) return;
-    await _wm.setAlwaysOnTop(value);
-  }
+  Future<void> setAlwaysOnTop(bool value) => _platform.setAlwaysOnTop(value);
 
-  /// 关闭应用（桌面端用 WindowManager，保证资源释放）。
-  ///
-  /// 移动端 / 其他平台回退为退出进程。
-  Future<void> closeApp() async {
-    if (_isDesktop) {
-      try {
-        await _wm.destroy();
-        return;
-    } catch (_) {
-        // 某些环境 destroy 可能失败，回退到进程退出。
-    }
-  }
-    exit(0);
-}
+  /// 关闭应用。
+  Future<void> closeApp() => _platform.closeApp();
 
-  /// 查询全局鼠标光标位置（物理像素，屏幕坐标）。
+  /// 查询全局鼠标光标位置（物理像素，屏幕坐标）。不支持的平台返回 null。
   ///
-  /// 仅 Windows 端实现（见 windows/runner/flutter_window.cpp）；其他平台返回 null。
   /// 用途：窗口整体穿透时，仍能感知光标是否进入“设置”按钮热区，从而临时
   /// 关闭穿透，让按钮可以点击。
-  static const MethodChannel _cursorChannel =
-      MethodChannel('vocab_overlay/cursor');
-
-  Future<Offset?> getGlobalCursorPos() async {
-    if (!(!kIsWeb && Platform.isWindows)) return null;
-    try {
-      final result =
-          await _cursorChannel.invokeMapMethod<String, dynamic>('getCursorPos');
-      if (result == null) return null;
-      final x = (result['x'] as num?)?.toDouble();
-      final y = (result['y'] as num?)?.toDouble();
-      if (x == null || y == null) return null;
-      return Offset(x, y);
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<Offset?> getGlobalCursorPos() => _platform.getGlobalCursorPos();
 }
-

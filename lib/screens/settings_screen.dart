@@ -12,6 +12,9 @@ import 'adjust_screen.dart';
 ///  * “调整词汇位置”（位于“应用”之上）：进入调整界面；
 ///  * “应用”：把输入卡片内容提交为新词汇卡列表，返回主界面。
 class SettingsScreen extends StatefulWidget {
+  /// 设置界面关闭时的回调（移动端用于让悬浮窗恢复显示）。
+  static VoidCallback? onClosed;
+
   /// 进入设置时的初始词汇卡（主界面当前显示的内容）。
   final List<VocabCard> initialCards;
 
@@ -133,6 +136,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _apply() {
+    // 立即收起键盘：避免输入法窗口在“返回主界面”时干扰界面切换。
+    FocusManager.instance.primaryFocus?.unfocus();
     final cards = _collectCards();
     widget.onApply(cards);
   }
@@ -151,6 +156,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
+    // 设置界面关闭：让悬浮窗恢复显示卡片（移动端）。
+    SettingsScreen.onClosed?.call();
     for (final e in _entries) {
       e.dispose();
     }
