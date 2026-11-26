@@ -3,6 +3,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/legacy.dart';
 
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -128,6 +129,16 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   /// 当前词汇卡整体样式（有边框 / 无边框仅字体）。
   CardStyle _cardStyle = CardStyle.bordered;
 
+  /// [_cards] 里坐标所属的屏幕（宽 / 高，逻辑像素）。
+  ///
+  /// 卡片坐标是绝对坐标，只有配上「它是在哪块屏幕上摆的」才能被正确旋转到
+  /// 另一个方向。此前完全没有保存这个信息，横屏重启 / 旋转后只能靠猜，
+  /// 于是卡片位置偏移、下方卡片被覆盖 —— 这是本轮修复的核心。
+  Size? _cardScreen;
+
+  /// 是否已确定坐标系（加载完成 / 或首帧兜底）。
+  bool _screenSettled = false;
+
   bool _showSettings = false;
   bool _loaded = false;
 
@@ -200,6 +211,58 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     }
   }
 
+  /// 屏幕尺寸变化（横竖屏切换 / 折叠屏）。
+  ///
+  /// 卡片坐标 [_cardScreen] **不变**：它是「配置坐标」，是持久化的绝对参考。
+  /// 旋转后只需：
+  ///  1. 让主界面重建（主界面在渲染时把 [_cardScreen] 映射到当前视图尺寸）；
+  ///  2. 把同一份配置坐标重新推给悬浮窗，让悬浮窗引擎按新方向重新映射。
+  ///
+  /// 绝不在这里改写 [_cardScreen] —— 那会让坐标被反复旋转，越转越偏。
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    if (!mounted) return;
+    final view = _currentViewSize();
+    if (view == null) return;
+    if (!_screenSettled) {
+      // 首帧之前拿不到可靠尺寸：第一次拿到就确定为坐标系。
+      setState(() {
+        _cardScreen = view;
+        _screenSettled = true;
+      });
+      _syncSourceScreen();
+      return;
+    }
+    final key = '${view.width.toStringAsFixed(1)}x'
+        '${view.height.toStringAsFixed(1)}';
+    if (key == _lastViewKey) return;
+    _lastViewKey = key;
+    debugPrint('[main] view → $key (cards belong to '
+        '${_cardScreen?.width.toStringAsFixed(1)}x'
+        '${_cardScreen?.height.toStringAsFixed(1)})');
+    setState(() {});
+    if (_isAndroid) {
+      _syncSourceScreen();
+      // 用配置坐标重推一次：悬浮窗引擎收到后按新方向映射。
+      unawaited(_pushCurrentCards());
+    }
+  }
+
+  /// 当前视图尺寸的去重键（避免同一尺寸重复重建）。
+  String? _lastViewKey;
+
+  /// 把当前卡片（配置坐标）推送给悬浮窗；不存在则不动。
+  Future<void> _pushCurrentCards() async {
+    if (!_isAndroid) return;
+    if (!await MobileController.instance.isShowing()) return;
+    try {
+      await MobileController.instance.showCards(_cards, style: _cardStyle);
+    } catch (e) {
+      debugPrint('[main] push cards after rotation failed: $e');
+    }
+  }
+
   /// 切到后台时调用：权限已授予则直接创建 / 更新悬浮窗并显示卡片。
   ///
   /// 未授权时**不**跳转系统设置页（切后台时弹权限页体验很糟），
@@ -233,8 +296,32 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     setState(() {
       _cards = _migrateToLogicalCoords(cards);
       _cardStyle = settings.cardStyle;
+      // 卡片坐标所属的屏幕：优先用保存时的值，旧数据（没存过）用当前视图。
+      _cardScreen = settings.screen ?? _currentViewSize();
       _loaded = true;
+      _screenSettled = _cardScreen != null;
     });
+    _syncSourceScreen();
+  }
+
+  /// 当前 Flutter 视图尺寸（逻辑像素）。
+  Size? _currentViewSize() {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isEmpty) return null;
+    final view = views.first;
+    final dpr = view.devicePixelRatio;
+    if (dpr <= 0) return null;
+    final size = view.physicalSize / dpr;
+    if (size.width <= 0 || size.height <= 0) return null;
+    return size;
+  }
+
+  /// 把「坐标所属屏幕」同步给悬浮窗平台层（旋转时必须靠它）。
+  void _syncSourceScreen() {
+    final screen = _cardScreen;
+    if (screen != null) {
+      MobileController.instance.setSourceScreen(screen);
+    }
   }
 
   /// 兼容旧版本保存的数据。
@@ -271,10 +358,15 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     await _storage.saveCards(cards);
   }
 
-  /// 保存卡片内容与整体样式。
+  /// 保存卡片内容与整体样式（连同卡片坐标所属的屏幕）。
+  ///
+  /// 存下「坐标属于哪块屏幕」是关键：下次启动若方向不同，靠它才能把卡片
+  /// 正确旋转过去，而不是把它们当成当前方向的坐标直接摆放。
   Future<void> _saveAll(List<VocabCard> cards, CardStyle style) async {
     await _storage.saveCards(cards);
-    await _storage.saveSettings(AppSettings(cardStyle: style));
+    await _storage.saveSettings(
+      AppSettings.withScreen(style, _cardScreen),
+    );
   }
 
   void _openSettings() {
@@ -453,6 +545,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     return MainScreen(
       cards: _cards,
       cardStyle: _cardStyle,
+      // 卡片坐标所属的屏幕：主界面据此把坐标旋转到当前方向。
+      cardScreen: _cardScreen,
       onOpenSettings: _openSettings,
     );
   }

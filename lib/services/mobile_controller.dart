@@ -2,9 +2,11 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+import 'package:material_ui/material_ui.dart' show Size;
 
 import '../models/card_style.dart';
 import '../models/vocab_card.dart';
+import '../utils/screen_metrics.dart';
 import 'overlay_mobile.dart';
 
 /// 移动端（Android）协调器：把“主应用（设置 / 控制台）”与“系统悬浮窗
@@ -37,6 +39,20 @@ class MobileController {
 
   bool _listening = false;
 
+  /// 卡片坐标所属的屏幕（逻辑像素）。
+  ///
+  /// 用于把悬浮窗回传的坐标换算回主界面当前的坐标系；也用于判断要不要换算。
+  Size? _sourceScreen;
+
+  /// 解析消息里的 `sourceScreen: {"w":.., "h":..}`；缺失 / 非法返回 null。
+  static Size? _parseSourceScreen(Object? raw) {
+    if (raw is! Map) return null;
+    final w = (raw['w'] as num?)?.toDouble();
+    final h = (raw['h'] as num?)?.toDouble();
+    if (w == null || h == null || w <= 0 || h <= 0) return null;
+    return Size(w, h);
+  }
+
   /// 监听悬浮窗引擎回传的数据。
   void startListening() {
     if (_listening) return;
@@ -62,15 +78,51 @@ class MobileController {
 
         final rawCards = map['cards'];
         if (rawCards is! List) return;
-        final cards = <VocabCard>[];
+        // ★ 只有「悬浮窗引擎主动回传」才当作拖动结果保存 ★
+        //
+        // 这条 channel 是双向的：主应用 push 出去的卡片也会回到这里。
+        // 若不区分，就会把「我刚发出去的卡片」当成「用户拖动后的结果」
+        // 再 `setState` + 写一次存储，形成自激回路（日志里那条消息反复出现、
+        // 每次都触发一次 `_saveCards`）。
+        //
+        // 悬浮窗引擎侧发送时带 `requestSave: true`（见 overlay_main._sendCards）。
+        if (map['requestSave'] != true) return;
+        var cards = <VocabCard>[];
         for (final e in rawCards) {
           if (e is Map) {
             cards.add(VocabCard.fromJson(Map<String, dynamic>.from(e)));
           }
         }
+        // 回传的坐标属于 sourceScreen 方向（悬浮窗引擎已经逆映射过）。
+        // 方向不同则先映射回主界面当前的坐标系，避免把横屏坐标直接当竖屏用。
+        final announced = _parseSourceScreen(map['sourceScreen']);
+        final current = _sourceScreen;
+        if (announced != null &&
+            current != null &&
+            announced != current &&
+            current.width > 0 &&
+            current.height > 0) {
+          cards = cards
+              .map(
+                (c) => c.movedTo(
+                  ScreenMetrics.mapPosition(
+                    pos: c.position,
+                    source: announced,
+                    screen: current,
+                    cardWidth: c.width,
+                    cardHeight: c.height,
+                  ),
+                ),
+              )
+              .toList();
+        }
+        debugPrint('[main] overlay returned cards=${cards.length} '
+            'source=${announced == null ? '?' : ScreenMetrics.describe(announced)}');
         onCardsUpdated?.call(cards);
-      } catch (_) {
-        // 忽略非法消息。
+      } catch (e) {
+        // 不静默吞异常：非法消息 / 解析失败都要在日志里可见，
+        // 否则「卡片位置回传有没有成功」无从判断。
+        debugPrint('[main] overlay message handling failed: $e');
       }
     });
   }
@@ -120,6 +172,17 @@ class MobileController {
   /// 关闭悬浮窗。
   Future<void> hide() => _platform.hideOverlay();
 
+  /// 横竖屏切换后：把原生悬浮窗重新贴回整块屏幕。
+  Future<void> refreshWindowForOrientation() =>
+      _platform.refreshWindowForOrientation();
+
+  /// 显示 / 隐藏悬浮窗窗口本身（不销毁服务与引擎）。
+  ///
+  /// 设置界面打开期间用它把原生窗口缩成 0×0，避免可触摸的全屏悬浮窗
+  /// 在横屏下遮挡主应用自己的控件。
+  Future<void> setWindowVisible(bool visible) =>
+      NativeOverlay.setWindowVisible(visible);
+
   /// 只切换悬浮窗内容的可见性（不重建 / 不移动卡片）。
   Future<void> setCardsVisible(bool visible) =>
       _platform.setCardsVisible(visible);
@@ -131,6 +194,15 @@ class MobileController {
   void setPageVisible(bool visible) {
     _platform.setPageVisible(visible);
     onPageStateChanged?.call(visible);
+  }
+
+  /// 告知平台层：卡片坐标属于哪块屏幕（宽 / 高，逻辑像素）。
+  ///
+  /// 必须与卡片数据一起下发，否则悬浮窗引擎无法判断该不该把坐标旋转 90°，
+  /// 旋转后卡片就会错位 / 被裁剪。
+  void setSourceScreen(Size size) {
+    _sourceScreen = size;
+    _platform.setSourceScreen(size);
   }
 
   /// 主应用移到后台（让悬浮窗显示在其他应用之上）。

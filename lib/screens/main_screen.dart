@@ -6,8 +6,10 @@ import 'package:material_ui/material_ui.dart';
 
 import '../models/card_style.dart';
 import '../models/vocab_card.dart';
+import '../services/mobile_controller.dart';
 import '../services/overlay_mobile.dart' show NativeOverlay;
 import '../services/overlay_service.dart';
+import '../utils/screen_metrics.dart';
 import '../widgets/vocab_card_view.dart';
 
 /// 主界面：
@@ -36,6 +38,12 @@ class MainScreen extends StatefulWidget {
   /// 词汇卡整体样式（有边框 / 无边框仅字体）。
   final CardStyle cardStyle;
 
+  /// [cards] 里坐标所属的屏幕（宽 / 高，逻辑像素）。
+  ///
+  /// 卡片坐标是绝对坐标；它与当前视图尺寸方向不同时，需要旋转 90° 才能落到
+  /// 正确位置。为 null 时退化为「按当前视图夹取」（旧行为）。
+  final Size? cardScreen;
+
   final VoidCallback onOpenSettings;
 
   const MainScreen({
@@ -43,13 +51,15 @@ class MainScreen extends StatefulWidget {
     required this.cards,
     required this.onOpenSettings,
     this.cardStyle = CardStyle.bordered,
+    this.cardScreen,
   });
 
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen>
+    with WidgetsBindingObserver {
   /// 当前是否处于“设置按钮热区”内（用于驱动视觉高亮与穿透切换）。
   bool _inButtonHotZone = false;
 
@@ -80,6 +90,8 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    // 监听屏幕尺寸变化（横竖屏切换 / 分屏 / 折叠屏），见 didChangeMetrics。
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refreshOverlayActive();
       // 默认整体穿透。
@@ -109,6 +121,41 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  /// 屏幕尺寸变化（横竖屏切换、分屏、折叠屏展开）。
+  ///
+  /// 两件事：
+  ///  1. 本界面兜底绘制的卡片要跟着坐标系旋转（见 [_mappedCard]）；
+  ///  2. 原生悬浮窗（如果存在）要重新贴回整块屏幕 —— 插件把窗口尺寸 / 可用区
+  ///     缓存在服务里，旋转后不会自己更新，窗口比屏幕小时卡片就会被挤到
+  ///     边界上（表现为下方词汇卡被覆盖）。
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    final size = ScreenMetrics.of(context);
+    final key = ScreenMetrics.describe(size);
+    if (key == _lastScreenKey) return;
+    debugPrint('[main] screen size -> $key');
+    _lastScreenKey = key;
+    if (!mounted) return;
+    // 卡片坐标的旋转映射在 build 里按视图尺寸完成（见 _syncLayoutSize），
+    // 这里只需要触发一次重建。
+    setState(() {});
+    if (_isMobile) {
+      // 旋转会重建主 Activity / 悬浮窗窗口，重新核对谁来画卡片。
+      _refreshOverlayActive();
+      unawaited(MobileController.instance.refreshWindowForOrientation());
+    }
+  }
+
+  /// 主应用侧的卡片坐标系（布局模式）。
+  ///
+  /// 只用于日志 / 判断方向是否变化。**不参与坐标映射** —— 卡片坐标的参考
+  /// 方向由 [MainScreen.cardScreen] 提供（见 [_buildLocalCard]）。
+  Size _layoutSize = Size.zero;
+
+  /// 最近一次记录的屏幕尺寸（用于 didChangeMetrics 去重）。
+  String? _lastScreenKey;
+
   /// 查询原生悬浮窗是否在显示，用于决定本界面是否绘制卡片。
   ///
   /// 只在结果变化时 `setState`，避免无谓重建（也避免打断按钮热区状态）。
@@ -128,6 +175,57 @@ class _MainScreenState extends State<MainScreen> {
             oldWidget.cardStyle != widget.cardStyle)) {
       _refreshOverlayActive();
     }
+  }
+
+  /// 主界面兜底绘制的单张卡片（位置已随方向映射并夹回当前屏幕）。
+  ///
+  /// 只在渲染层做映射，**不修改** [VocabCard] 本身：横竖屏来回切换时不会因为
+  /// 一次临时的越界校验就把用户保存的坐标悄悄改写。映射以配置坐标为准重算，
+  /// 幂等 —— 反复旋转、反复重建都不会漂移。
+  List<Widget> _buildLocalCard(VocabCard card, Size screen) {
+    // 参考方向来自 widget（配置坐标所属的屏幕），而不是「上一次渲染的方向」。
+    //
+    // 之前用 [_sourceSize]（首帧记录、之后随方向变化而改写）当参考：
+    // 旋转一次之后参考被改写成新方向，第二次旋转就按新方向去映射 ——
+    // 卡片被反复旋转，正是「旋转后卡片越转越偏 / 下方卡片被覆盖」的成因。
+    final source = widget.cardScreen;
+    final pos = (source == null || source.width <= 0 || source.height <= 0)
+        ? ScreenMetrics.clampPosition(
+            pos: card.position,
+            screen: screen,
+            cardWidth: card.width,
+            cardHeight: card.height,
+          )
+        : ScreenMetrics.mapPosition(
+            pos: card.position,
+            source: source,
+            screen: screen,
+            cardWidth: card.width,
+            cardHeight: card.height,
+          );
+    return [
+      Positioned(
+        left: pos.dx,
+        top: pos.dy,
+        child: IgnorePointer(
+          child: VocabCardView(card: card, style: widget.cardStyle),
+        ),
+      ),
+    ];
+  }
+
+  /// 记录本帧的视图尺寸（仅用于检测方向变化 / 日志）。
+  ///
+  /// 坐标映射不依赖它：参考方向恒为 [MainScreen.cardScreen]。
+  void _syncLayoutSize(Size view) {
+    if (_layoutSize != view) {
+      debugPrint(
+        '[main] local layout '
+        '${ScreenMetrics.describe(_layoutSize)} -> '
+        '${ScreenMetrics.describe(view)}',
+      );
+    }
+    _layoutSize = view;
   }
 
   void _startCursorWatch() {
@@ -176,6 +274,7 @@ class _MainScreenState extends State<MainScreen> {
   void dispose() {
     _cursorTimer?.cancel();
     _overlayStateTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -185,6 +284,11 @@ class _MainScreenState extends State<MainScreen> {
     // 本界面不再重复绘制（否则会出现“两份卡片”）。
     // 桌面端没有系统悬浮窗，始终由本界面绘制。
     final showLocalCards = !_isMobile || !_overlayActive;
+
+    // 卡片坐标系 = 本视图的逻辑尺寸。横竖屏切换后这里会跟着变，
+    // 下面的映射把「按旧方向保存的坐标」旋转到新方向上（见 [_buildLocalCard]）。
+    final screen = ScreenMetrics.of(context);
+    _syncLayoutSize(screen);
 
     return Material(
       color: Colors.transparent,
@@ -197,16 +301,7 @@ class _MainScreenState extends State<MainScreen> {
                 children: [
                   if (showLocalCards)
                     for (final card in widget.cards)
-                      Positioned(
-                        left: card.x,
-                        top: card.y,
-                        child: IgnorePointer(
-                          child: VocabCardView(
-                            card: card,
-                            style: widget.cardStyle,
-                          ),
-                        ),
-                      ),
+                      ..._buildLocalCard(card, screen),
                 ],
               ),
             ),

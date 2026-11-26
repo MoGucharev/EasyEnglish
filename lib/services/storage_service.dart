@@ -1,24 +1,62 @@
 import 'dart:convert';
+import 'dart:ui' show Size;
 
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/card_style.dart';
 import '../models/vocab_card.dart';
 
-/// 应用设置（目前只有词汇卡的整体样式）。
+/// 应用设置（词汇卡整体样式 + 卡片坐标所属的屏幕）。
 class AppSettings {
   /// 词汇卡整体外观样式。
   final CardStyle cardStyle;
 
-  const AppSettings({this.cardStyle = CardStyle.bordered});
+  /// 保存的卡片坐标属于哪个方向的屏幕（宽 / 高，逻辑像素）。
+  ///
+  /// 卡片坐标是「相对屏幕的绝对值」，只有配上它当时的屏幕尺寸才能被正确
+  /// 映射到另一个方向。缺少它就只能靠猜（例如把横屏保存的坐标当成竖屏坐标
+  /// 旋转），旋转会越转越偏 —— 这是「旋转后卡片位置错乱」的根因之一。
+  final double? screenWidth;
+  final double? screenHeight;
 
-  AppSettings copyWith({CardStyle? cardStyle}) =>
-      AppSettings(cardStyle: cardStyle ?? this.cardStyle);
+  const AppSettings({
+    this.cardStyle = CardStyle.bordered,
+    this.screenWidth,
+    this.screenHeight,
+  });
 
-  Map<String, dynamic> toJson() => {'cardStyle': cardStyle.id};
+  /// 以「坐标所属屏幕」构造（width / height 同时给出或都不给）。
+  factory AppSettings.withScreen(CardStyle style, Size? screen) => AppSettings(
+    cardStyle: style,
+    screenWidth: screen?.width,
+    screenHeight: screen?.height,
+  );
 
-  factory AppSettings.fromJson(Map<String, dynamic> json) =>
-      AppSettings(cardStyle: CardStyle.fromId(json['cardStyle']));
+  /// 卡片坐标所属屏幕（两个分量都有效时才有值）。
+  Size? get screen {
+    final w = screenWidth;
+    final h = screenHeight;
+    if (w == null || h == null || w <= 0 || h <= 0) return null;
+    return Size(w, h);
+  }
+
+  AppSettings copyWith({CardStyle? cardStyle, Size? screen}) => AppSettings(
+    cardStyle: cardStyle ?? this.cardStyle,
+    screenWidth: screen?.width ?? screenWidth,
+    screenHeight: screen?.height ?? screenHeight,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'cardStyle': cardStyle.id,
+    if (screenWidth != null) 'screenWidth': screenWidth,
+    if (screenHeight != null) 'screenHeight': screenHeight,
+  };
+
+  factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
+    cardStyle: CardStyle.fromId(json['cardStyle']),
+    screenWidth: (json['screenWidth'] as num?)?.toDouble(),
+    screenHeight: (json['screenHeight'] as num?)?.toDouble(),
+  );
 }
 
 /// 负责词汇卡与应用设置的持久化存储。
@@ -70,3 +108,4 @@ class StorageService {
     await prefs.setString(_settingsKey, jsonEncode(settings.toJson()));
   }
 }
+
